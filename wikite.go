@@ -26,7 +26,8 @@ func handle(e error, msg string) {
 }
 
 const (
-	maxCvtProcs = 50
+	maxCvtProcs  = 50
+	maxOpenFiles = 2048
 )
 
 var (
@@ -34,8 +35,9 @@ var (
 	setMutex sync.Mutex
 	ctr      int64 = 0
 
-	empty = struct{}{}
-	sem   = make(chan struct{}, maxCvtProcs)
+	empty   = struct{}{}
+	procSem = make(chan struct{}, maxCvtProcs)
+	fileSem = make(chan struct{}, maxOpenFiles)
 
 	pdfBinary string
 )
@@ -154,12 +156,14 @@ type (
 )
 
 func downloadRefs(filename string) {
+	fileSem <- empty
 	f, err := os.Open("out/" + filename)
 	handle(err, "opening article json file")
 
 	var article ArticleRecord
 	handle(json.NewDecoder(f).Decode(&article), "reading article")
 	f.Close()
+	<-fileSem
 
 	log.Println("downloading refs for", filename)
 
@@ -213,10 +217,12 @@ func retrieveRef(link string) {
 		return
 	}
 
+	fileSem <- empty
 	tmp, err := ioutil.TempFile("", "pdf_dl")
 	handle(err, "creating tmp file")
 	defer func() {
 		handle(tmp.Close(), "closing tmp file")
+		<-fileSem
 		handle(os.Remove(tmp.Name()), "destroying tmp file")
 	}()
 
@@ -226,9 +232,11 @@ func retrieveRef(link string) {
 		return
 	}
 
-	sem <- empty
+	fileSem <- empty
+	procSem <- empty
 	defer func() {
-		<-sem
+		<-procSem
+		<-fileSem
 	}()
 
 	c := exec.Command(pdfBinary, "-nopgbrk", "-q", tmp.Name(), targetFile)
