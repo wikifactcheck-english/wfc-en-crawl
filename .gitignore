@@ -68,3 +68,4 @@ fabric.properties
 refdata
 !bin/pdftotext_win64.exe
 index.txt
+bad.txt

@@ -14,8 +14,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"sync"
-	"sync/atomic"
+	"time"
 
 	"gopkg.in/fatih/set.v0"
 )
@@ -26,19 +25,10 @@ func handle(e error, msg string) {
 	}
 }
 
-const (
-	maxCvtProcs  = 50
-	maxOpenFiles = 512
-)
-
 var (
-	badSet   = set.New()
-	setMutex sync.Mutex
-	ctr      int64 = 0
+	badSet = set.New()
 
-	empty   = struct{}{}
-	procSem = make(chan struct{}, maxCvtProcs)
-	fileSem = make(chan struct{}, maxOpenFiles)
+	empty = struct{}{}
 
 	pdfBinary string
 )
@@ -95,53 +85,51 @@ func main() {
 
 			badSet.Add(elt)
 		}
-		file.Close()
+		handle(file.Close(), "closing bad.txt")
+	} else if os.IsNotExist(err) {
+		file, err := os.Create("bad.txt")
+		handle(err, "creating bad.txt")
+		handle(file.Close(), "closing bad.txt")
 	}
+
+	go func() {
+		f, err := os.OpenFile("bad.txt", os.O_WRONLY|os.O_TRUNC, 0644)
+		handle(err, "opening bad.txt")
+		defer f.Close()
+
+		for range time.Tick(500 * time.Millisecond) {
+			for _, str := range set.StringSlice(badSet) {
+				f.WriteString(str + "\n")
+			}
+		}
+	}()
 
 	index, err := os.Open("index.txt")
 	handle(err, "reading index.txt")
 
 	indexScanner := bufio.NewScanner(index)
 
-	wg := &sync.WaitGroup{}
+	const maxItems = 100
+	sem := make(chan struct{}, maxItems)
+	defer close(sem)
+
 	for indexScanner.Scan() {
 		name := indexScanner.Text()
 
-		wg.Add(1)
+		sem <- empty
 
 		go func(name string) {
+			defer func() {
+				<-sem
+			}()
+
 			downloadRefs(name)
-
-			result := atomic.AddInt64(&ctr, 1)
-
-			if result%10000 == 0 {
-				setMutex.Lock()
-				defer setMutex.Unlock()
-
-				var file *os.File
-
-				if _, err := os.Stat("bad.txt"); err == nil {
-					file, err = os.Open("bad.txt")
-					handle(err, "overwriting bad.txt")
-				} else {
-					file, err = os.Create("bad.txt")
-					handle(err, "creating bad.txt")
-				}
-
-				defer func() {
-					handle(file.Close(), "closing bad.txt")
-				}()
-
-				for _, v := range set.StringSlice(badSet) {
-					file.WriteString(v + "\n")
-				}
-			}
-
-			wg.Done()
 		}(name)
 	}
 
-	wg.Wait()
+	for i := 0; i < maxItems; i++ {
+		sem <- empty
+	}
 }
 
 type (
@@ -158,28 +146,36 @@ type (
 )
 
 func downloadRefs(filename string) {
-	fileSem <- empty
 	f, err := os.Open("out/" + filename)
 	handle(err, "opening article json file")
 
 	var article ArticleRecord
 	handle(json.NewDecoder(f).Decode(&article), "reading article")
 	handle(f.Close(), "closing ref_data file")
-	<-fileSem
 
 	log.Println("downloading refs for", filename)
 
-	wg := &sync.WaitGroup{}
+	const maxItems = 10
+	sem := make(chan struct{}, maxItems)
+	defer close(sem)
+
 	for _, sent := range article.Sentences {
 		for _, link := range sent.Links {
-			wg.Add(1)
+			sem <- empty
+
 			go func(link string) {
+				defer func() {
+					<-sem
+				}()
+
 				retrieveRef(link)
-				wg.Done()
 			}(link)
 		}
 	}
-	wg.Wait()
+
+	for i := 0; i < maxItems; i++ {
+		sem <- empty
+	}
 }
 
 func retrieveRef(link string) {
@@ -199,17 +195,14 @@ func retrieveRef(link string) {
 		return
 	}
 
-	fileSem <- empty
 	// call head first to check filetype
 	resp, err := client.Head(link)
 	if err != nil {
-		<-fileSem
 		badSet.Add(hexDigest)
 		return
 	}
 
 	resp.Body.Close() // shouldn't need this
-	<-fileSem
 
 	if !checkResp(resp) {
 		badSet.Add(hexDigest)
@@ -218,45 +211,32 @@ func retrieveRef(link string) {
 
 	log.Println("downloading ", link)
 
-	fileSem <- empty
 	// actually retrieve file
 	resp, err = client.Get(link)
 	if err != nil {
-		<-fileSem
 		return
 	}
 
 	if !checkResp(resp) {
-		<-fileSem
 		resp.Body.Close()
 		return
 	}
 
-	fileSem <- empty
 	tmp, err := ioutil.TempFile("", "pdf_dl")
 	handle(err, "creating tmp file")
 	defer func() {
 		handle(tmp.Close(), "closing tmp file")
-		<-fileSem
 		handle(os.Remove(tmp.Name()), "destroying tmp file")
 	}()
 
 	_, err = io.Copy(tmp, resp.Body)
 	resp.Body.Close()
-	<-fileSem // for request
 
 	if err != nil {
 		log.Printf("writing content to tmp file: %q", err)
 		badSet.Add(hexDigest)
 		return
 	}
-
-	fileSem <- empty // temp file
-	procSem <- empty
-	defer func() {
-		<-procSem
-		<-fileSem
-	}()
 
 	c := exec.Command(pdfBinary, "-nopgbrk", "-q", tmp.Name(), targetFile)
 
