@@ -28,7 +28,7 @@ func handle(e error, msg string) {
 
 const (
 	maxCvtProcs  = 50
-	maxOpenFiles = 128
+	maxOpenFiles = 1
 )
 
 var (
@@ -201,7 +201,13 @@ func retrieveRef(link string) {
 
 	// call head first to check filetype
 	resp, err := client.Head(link)
-	if err != nil || !checkResp(resp) {
+	if err != nil {
+		badSet.Add(hexDigest)
+		return
+	}
+
+	if !checkResp(resp) {
+		resp.Body.Close() // shouldn't need this
 		badSet.Add(hexDigest)
 		return
 	}
