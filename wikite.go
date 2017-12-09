@@ -21,12 +21,12 @@ import (
 
 func handle(e error, msg string) {
 	if e != nil {
-		log.Fatalln(msg[0], e)
+		log.Fatalln(msg, e)
 	}
 }
 
 const (
-	maxCvtProcs = 1
+	maxCvtProcs = 50
 )
 
 var (
@@ -55,6 +55,28 @@ func main() {
 		os.Mkdir("refdata", 0700)
 	}
 
+	if _, err := os.Stat("index.txt"); os.IsNotExist(err) {
+		outDir, err := os.Open("out")
+		handle(err, "opening out dir")
+
+		log.Println("reading directory")
+
+		names, err := outDir.Readdirnames(-1)
+		handle(err, "reading out dir")
+
+		outDir.Close()
+		log.Println("done reading directory")
+
+		file, err := os.Create("index.txt")
+		handle(err, "creating index.txt")
+
+		for _, v := range names {
+			file.WriteString(v + "\n")
+		}
+
+		file.Close()
+	}
+
 	if _, err := os.Stat("bad.txt"); err == nil {
 		file, err := os.Open("bad.txt")
 		handle(err, "opening bad.txt")
@@ -63,6 +85,7 @@ func main() {
 		for {
 			elt, err := reader.ReadString('\n')
 			if err == io.EOF {
+				badSet.Add(elt)
 				break
 			}
 			handle(err, "reading bad.txt")
@@ -72,19 +95,15 @@ func main() {
 		file.Close()
 	}
 
-	outDir, err := os.Open("out")
-	handle(err, "opening out dir")
+	index, err := os.Open("index.txt")
+	handle(err, "reading index.txt")
 
-	log.Println("reading directory")
-
-	names, err := outDir.Readdirnames(-1)
-	handle(err, "reading out dir")
-
-	outDir.Close()
-	log.Println("done reading directory")
+	indexScanner := bufio.NewScanner(index)
 
 	wg := &sync.WaitGroup{}
-	for _, name := range names {
+	for indexScanner.Scan() {
+		name := indexScanner.Text()
+
 		wg.Add(1)
 
 		go func(name string) {
@@ -117,6 +136,7 @@ func main() {
 			wg.Done()
 		}(name)
 	}
+
 	wg.Wait()
 }
 
@@ -157,6 +177,8 @@ func downloadRefs(filename string) {
 }
 
 func retrieveRef(link string) {
+	client := http.Client{}
+
 	mBytes := md5.Sum([]byte(link))
 	hexDigest := hex.EncodeToString(mBytes[:])
 
@@ -172,7 +194,7 @@ func retrieveRef(link string) {
 	}
 
 	// call head first to check filetype
-	resp, err := http.Head(link)
+	resp, err := client.Head(link)
 	if err != nil || !checkResp(resp) {
 		badSet.Add(hexDigest)
 		return
@@ -181,7 +203,7 @@ func retrieveRef(link string) {
 	log.Println("downloading ", link)
 
 	// actually retrieve file
-	resp, err = http.Get(link)
+	resp, err = client.Get(link)
 	if err != nil {
 		return
 	}
@@ -198,8 +220,11 @@ func retrieveRef(link string) {
 		handle(os.Remove(tmp.Name()), "destroying tmp file")
 	}()
 
-	_, err = io.Copy(tmp, resp.Body)
-	handle(err, "writing content to tmp file")
+	if _, err = io.Copy(tmp, resp.Body); err != nil {
+		log.Printf("writing content to tmp file: %q", err)
+		badSet.Add(hexDigest)
+		return
+	}
 
 	sem <- empty
 	defer func() {
@@ -209,7 +234,11 @@ func retrieveRef(link string) {
 	c := exec.Command(pdfBinary, "-nopgbrk", "-q", tmp.Name(), targetFile)
 
 	out, err := c.CombinedOutput()
-	handle(err, "converting pdf: "+string(out))
+	if err != nil {
+		log.Printf("converting %v errored: %v\n%v", link, err, string(out))
+		badSet.Add(hexDigest)
+		return
+	}
 
 	log.Println("successfully downloaded ", link)
 }
