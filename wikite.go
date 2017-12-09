@@ -12,9 +12,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"os/signal"
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"gopkg.in/fatih/set.v0"
@@ -40,6 +42,7 @@ var (
 		Transport: transport,
 		Timeout:   30 * time.Second,
 	}
+	done = make(chan struct{}, 1)
 )
 
 func init() {
@@ -94,14 +97,30 @@ func main() {
 		handle(file.Close(), "closing bad.txt")
 	}
 
+	sigChan := make(chan os.Signal, 1)
+
+	go func() {
+		<-sigChan
+		close(done)
+		log.Println("shutting down...")
+	}()
+
+	signal.Notify(sigChan, syscall.SIGINT)
+
 	go func() {
 		f, err := os.OpenFile("bad.txt", os.O_WRONLY|os.O_TRUNC, 0644)
 		handle(err, "opening bad.txt")
 		defer f.Close()
 
-		for range time.Tick(500 * time.Millisecond) {
-			for _, str := range set.StringSlice(badSet) {
-				f.WriteString(str + "\n")
+		tick := time.Tick(500 * time.Millisecond)
+		for {
+			select {
+			case <-tick:
+				for _, str := range set.StringSlice(badSet) {
+					f.WriteString(str + "\n")
+				}
+			case <-done:
+				return
 			}
 		}
 	}()
@@ -118,7 +137,13 @@ func main() {
 	for indexScanner.Scan() {
 		name := indexScanner.Text()
 
-		sem <- empty
+		select {
+		case _, ok := <-done:
+			if !ok {
+				break
+			}
+		case sem <- empty:
+		}
 
 		go func(name string) {
 			defer func() {
@@ -161,9 +186,16 @@ func downloadRefs(filename string) {
 	sem := make(chan struct{}, maxItems)
 	defer close(sem)
 
+outer:
 	for _, sent := range article.Sentences {
 		for _, link := range sent.Links {
-			sem <- empty
+			select {
+			case _, ok := <-done:
+				if !ok {
+					break outer
+				}
+			case sem <- empty:
+			}
 
 			go func(link string) {
 				defer func() {
