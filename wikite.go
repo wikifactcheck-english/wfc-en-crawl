@@ -118,6 +118,7 @@ func main() {
 		for {
 			select {
 			case <-tick:
+				f.Seek(0, 0)
 				log.Printf("%v articles complete", articleCount)
 				for _, str := range set.StringSlice(badSet) {
 					f.WriteString(str + "\n")
