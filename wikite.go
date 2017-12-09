@@ -28,7 +28,7 @@ func handle(e error, msg string) {
 
 const (
 	maxCvtProcs  = 50
-	maxOpenFiles = 256
+	maxOpenFiles = 128
 )
 
 var (
