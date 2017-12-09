@@ -26,11 +26,18 @@ func handle(e error, msg string) {
 }
 
 var (
-	badSet = set.New()
-
-	empty = struct{}{}
-
+	badSet    = set.New()
+	empty     = struct{}{}
 	pdfBinary string
+	transport = &http.Transport{
+		MaxIdleConns:          10,
+		IdleConnTimeout:       10 * time.Millisecond,
+		ResponseHeaderTimeout: 500 * time.Millisecond,
+	}
+	client = &http.Client{
+		Transport: transport,
+		Timeout:   30 * time.Second,
+	}
 )
 
 func init() {
@@ -74,16 +81,9 @@ func main() {
 		file, err := os.Open("bad.txt")
 		handle(err, "opening bad.txt")
 
-		reader := bufio.NewReader(file)
-		for {
-			elt, err := reader.ReadString('\n')
-			if err == io.EOF {
-				badSet.Add(elt)
-				break
-			}
-			handle(err, "reading bad.txt")
-
-			badSet.Add(elt)
+		scanner := bufio.NewScanner(file)
+		for scanner.Scan() {
+			badSet.Add(scanner.Text())
 		}
 		handle(file.Close(), "closing bad.txt")
 	} else if os.IsNotExist(err) {
@@ -179,8 +179,6 @@ func downloadRefs(filename string) {
 }
 
 func retrieveRef(link string) {
-	client := http.Client{}
-
 	mBytes := md5.Sum([]byte(link))
 	hexDigest := hex.EncodeToString(mBytes[:])
 
@@ -202,8 +200,6 @@ func retrieveRef(link string) {
 		return
 	}
 
-	resp.Body.Close() // shouldn't need this
-
 	if !checkResp(resp) {
 		badSet.Add(hexDigest)
 		return
@@ -218,6 +214,8 @@ func retrieveRef(link string) {
 	}
 
 	if !checkResp(resp) {
+		_, err := ioutil.ReadAll(resp.Body)
+		handle(err, "consuming body")
 		resp.Body.Close()
 		return
 	}
