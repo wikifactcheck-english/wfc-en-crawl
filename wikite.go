@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"gopkg.in/fatih/set.v0"
 )
@@ -159,6 +160,7 @@ type (
 
 func downloadRefs(filename string) {
 	fileSem <- empty
+	time.Sleep(5 * time.Millisecond)
 	f, err := os.Open("out/" + filename)
 	handle(err, "opening article json file")
 
@@ -220,6 +222,7 @@ func retrieveRef(link string) {
 	}
 
 	fileSem <- empty
+	time.Sleep(5 * time.Millisecond)
 	tmp, err := ioutil.TempFile("", "pdf_dl")
 	handle(err, "creating tmp file")
 	defer func() {
@@ -235,6 +238,8 @@ func retrieveRef(link string) {
 	}
 
 	fileSem <- empty
+	time.Sleep(5 * time.Millisecond)
+
 	procSem <- empty
 	defer func() {
 		<-procSem
