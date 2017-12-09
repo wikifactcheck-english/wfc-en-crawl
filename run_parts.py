@@ -10,7 +10,7 @@ ct = 0
 procs = []
 
 for filename in os.listdir('indices'):
-    logf = open('logs/{}.log'.format(ct))
+    logf = open('logs/{}.log'.format(ct), 'w')
     proc = subprocess.Popen(shlex.split('go run wikite.go -badFile bad/{}.txt -inFile indices/{}'.format(ct, filename)),
                             stdout=logf, stderr=logf)
 
