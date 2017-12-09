@@ -213,6 +213,8 @@ func retrieveRef(link string) {
 		return
 	}
 
+	defer resp.Body.Close()
+
 	if !checkResp(resp) {
 		_, err := ioutil.ReadAll(resp.Body)
 		handle(err, "consuming body")
@@ -228,7 +230,6 @@ func retrieveRef(link string) {
 	}()
 
 	_, err = io.Copy(tmp, resp.Body)
-	resp.Body.Close()
 
 	if err != nil {
 		log.Printf("writing content to tmp file: %q", err)
