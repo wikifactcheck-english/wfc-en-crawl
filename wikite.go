@@ -16,6 +16,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -42,7 +43,8 @@ var (
 		Transport: transport,
 		Timeout:   30 * time.Second,
 	}
-	done = make(chan struct{}, 1)
+	done               = make(chan struct{}, 1)
+	articleCount int64 = 0
 )
 
 func init() {
@@ -116,6 +118,7 @@ func main() {
 		for {
 			select {
 			case <-tick:
+				log.Printf("%v articles complete", articleCount)
 				for _, str := range set.StringSlice(badSet) {
 					f.WriteString(str + "\n")
 				}
@@ -148,6 +151,7 @@ func main() {
 		go func(name string) {
 			defer func() {
 				<-sem
+				atomic.AddInt64(&articleCount, 1)
 			}()
 
 			downloadRefs(name)
@@ -179,8 +183,6 @@ func downloadRefs(filename string) {
 	var article ArticleRecord
 	handle(json.NewDecoder(f).Decode(&article), "reading article")
 	handle(f.Close(), "closing ref_data file")
-
-	log.Println("downloading refs for", filename)
 
 	const maxItems = 10
 	sem := make(chan struct{}, maxItems)
@@ -238,8 +240,6 @@ func retrieveRef(link string) {
 		badSet.Add(hexDigest)
 		return
 	}
-
-	log.Println("downloading ", link)
 
 	// actually retrieve file
 	resp, err = client.Get(link)
