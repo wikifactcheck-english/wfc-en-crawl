@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/md5"
 	"encoding/hex"
 	"encoding/json"
@@ -11,31 +10,45 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
-	pdfcontent "github.com/unidoc/unidoc/pdf/contentstream"
-	pdf "github.com/unidoc/unidoc/pdf/model"
 	"gopkg.in/fatih/set.v0"
 )
 
-func handle(e error) {
+func handle(e error, msg string) {
 	if e != nil {
-		log.Fatal(e)
+		log.Fatalln(msg[0], e)
 	}
 }
+
+const (
+	maxCvtProcs = 1
+)
 
 var (
 	badSet   = set.New()
 	setMutex sync.Mutex
 	ctr      int64 = 0
 
-	client = http.Client{
-		Timeout: 750 * time.Millisecond,
-	}
+	empty = struct{}{}
+	sem   = make(chan struct{}, maxCvtProcs)
+
+	pdfBinary string
 )
+
+func init() {
+	if runtime.GOOS == "windows" {
+		pdfBinary = "bin/pdftotext_win64.exe"
+	} else if runtime.GOOS == "linux" {
+		pdfBinary = "bin/pdftotext_linux64"
+	} else {
+		log.Panic("unsupported runtime")
+	}
+}
 
 func main() {
 	if _, err := os.Stat("refdata"); os.IsNotExist(err) {
@@ -44,7 +57,7 @@ func main() {
 
 	if _, err := os.Stat("bad.txt"); err == nil {
 		file, err := os.Open("bad.txt")
-		handle(err)
+		handle(err, "opening bad.txt")
 
 		reader := bufio.NewReader(file)
 		for {
@@ -52,7 +65,7 @@ func main() {
 			if err == io.EOF {
 				break
 			}
-			handle(err)
+			handle(err, "reading bad.txt")
 
 			badSet.Add(elt)
 		}
@@ -60,21 +73,21 @@ func main() {
 	}
 
 	outDir, err := os.Open("out")
-	handle(err)
+	handle(err, "opening out dir")
 
 	log.Println("reading directory")
 
 	names, err := outDir.Readdirnames(-1)
-	handle(err)
+	handle(err, "reading out dir")
 
 	outDir.Close()
 	log.Println("done reading directory")
 
-	var wg sync.WaitGroup
+	wg := &sync.WaitGroup{}
 	for _, name := range names {
 		wg.Add(1)
 
-		go func() {
+		go func(name string) {
 			downloadRefs(name)
 
 			result := atomic.AddInt64(&ctr, 1)
@@ -87,11 +100,14 @@ func main() {
 
 				if _, err := os.Stat("bad.txt"); err == nil {
 					file, err = os.Open("bad.txt")
-					handle(err)
+					handle(err, "overwriting bad.txt")
 				} else {
 					file, err = os.Create("bad.txt")
-					handle(err)
+					handle(err, "creating bad.txt")
 				}
+				defer func() {
+					handle(file.Close(), "closing bad.txt")
+				}()
 
 				for _, v := range set.StringSlice(badSet) {
 					file.WriteString(v + "\n")
@@ -99,7 +115,7 @@ func main() {
 			}
 
 			wg.Done()
-		}()
+		}(name)
 	}
 	wg.Wait()
 }
@@ -119,17 +135,25 @@ type (
 
 func downloadRefs(filename string) {
 	f, err := os.Open("out/" + filename)
-	handle(err)
+	handle(err, "opening article json file")
 
 	var article ArticleRecord
-	handle(json.NewDecoder(f).Decode(&article))
+	handle(json.NewDecoder(f).Decode(&article), "reading article")
 	f.Close()
 
+	log.Println("downloading refs for", filename)
+
+	wg := &sync.WaitGroup{}
 	for _, sent := range article.Sentences {
 		for _, link := range sent.Links {
-			retrieveRef(link)
+			wg.Add(1)
+			go func(link string) {
+				retrieveRef(link)
+				wg.Done()
+			}(link)
 		}
 	}
+	wg.Wait()
 }
 
 func retrieveRef(link string) {
@@ -148,7 +172,7 @@ func retrieveRef(link string) {
 	}
 
 	// call head first to check filetype
-	resp, err := client.Head(link)
+	resp, err := http.Head(link)
 	if err != nil || !checkResp(resp) {
 		badSet.Add(hexDigest)
 		return
@@ -157,46 +181,35 @@ func retrieveRef(link string) {
 	log.Println("downloading ", link)
 
 	// actually retrieve file
-	resp, err = client.Get(link)
-	if err != nil || !checkResp(resp) {
+	resp, err = http.Get(link)
+	if err != nil {
 		return
 	}
 
-	b, err := ioutil.ReadAll(resp.Body)
-	handle(err)
-
-	pdfReader, err := pdf.NewPdfReader(bytes.NewReader(b))
-	if enc, err := pdfReader.IsEncrypted(); err != nil || enc {
-		badSet.Add(hexDigest)
+	if !checkResp(resp) {
+		resp.Body.Close()
 		return
 	}
 
-	pdfPages, err := pdfReader.GetNumPages()
-	handle(err)
+	tmp, err := ioutil.TempFile("", "pdf_dl")
+	handle(err, "creating tmp file")
+	defer func() {
+		handle(tmp.Close(), "closing tmp file")
+		handle(os.Remove(tmp.Name()), "destroying tmp file")
+	}()
 
-	f, err := os.Create(targetFile)
-	handle(err)
-	defer f.Close()
+	_, err = io.Copy(tmp, resp.Body)
+	handle(err, "writing content to tmp file")
 
-	for i := 0; i < pdfPages; i++ {
-		page, err := pdfReader.GetPage(i + 1)
-		handle(err)
+	sem <- empty
+	defer func() {
+		<-sem
+	}()
 
-		cstreams, err := page.GetAllContentStreams()
-		handle(err)
+	c := exec.Command(pdfBinary, "-nopgbrk", "-q", tmp.Name(), targetFile)
 
-		//preParse := ""
-		//for i := range cstreams {
-		//	preParse += cstreams[i]
-		//}
-
-		parser := pdfcontent.NewContentStreamParser(cstreams)
-
-		text, err := parser.ExtractText()
-		handle(err)
-
-		f.WriteString(text)
-	}
+	out, err := c.CombinedOutput()
+	handle(err, "converting pdf: "+string(out))
 
 	log.Println("successfully downloaded ", link)
 }
