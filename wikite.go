@@ -6,6 +6,7 @@ import (
 	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"io"
 	"io/ioutil"
 	"log"
@@ -30,10 +31,14 @@ func handle(e error, msg string) {
 }
 
 var (
-	badSet    = set.New()
-	empty     = struct{}{}
-	pdfBinary string
-	transport = &http.Transport{
+	badSet       = set.New()
+	empty        = struct{}{}
+	pdfBinary    string
+	done               = make(chan struct{}, 1)
+	articleCount int64 = 0
+	badFile      string
+	indexFile    string
+	transport    = &http.Transport{
 		MaxIdleConns:          10,
 		IdleConnTimeout:       10 * time.Millisecond,
 		ResponseHeaderTimeout: 500 * time.Millisecond,
@@ -43,8 +48,6 @@ var (
 		Transport: transport,
 		Timeout:   30 * time.Second,
 	}
-	done               = make(chan struct{}, 1)
-	articleCount int64 = 0
 )
 
 func init() {
@@ -55,6 +58,10 @@ func init() {
 	} else {
 		log.Panic("unsupported runtime")
 	}
+
+	flag.StringVar(&badFile, "badFile", "bad.txt", "file to store bad links in")
+	flag.StringVar(&indexFile, "indexFile", "index.txt", "file to store directory index in")
+	flag.Parse()
 }
 
 func main() {
@@ -62,7 +69,7 @@ func main() {
 		os.Mkdir("refdata", 0700)
 	}
 
-	if _, err := os.Stat("index.txt"); os.IsNotExist(err) {
+	if _, err := os.Stat(indexFile); os.IsNotExist(err) {
 		outDir, err := os.Open("out")
 		handle(err, "opening out dir")
 
@@ -74,8 +81,8 @@ func main() {
 		outDir.Close()
 		log.Println("done reading directory")
 
-		file, err := os.Create("index.txt")
-		handle(err, "creating index.txt")
+		file, err := os.Create(indexFile)
+		handle(err, "creating index file")
 
 		for _, v := range names {
 			file.WriteString(v + "\n")
@@ -84,19 +91,19 @@ func main() {
 		file.Close()
 	}
 
-	if _, err := os.Stat("bad.txt"); err == nil {
-		file, err := os.Open("bad.txt")
-		handle(err, "opening bad.txt")
+	if _, err := os.Stat(badFile); err == nil {
+		file, err := os.Open(badFile)
+		handle(err, "opening badfile")
 
 		scanner := bufio.NewScanner(file)
 		for scanner.Scan() {
 			badSet.Add(scanner.Text())
 		}
-		handle(file.Close(), "closing bad.txt")
+		handle(file.Close(), "closing badfile")
 	} else if os.IsNotExist(err) {
-		file, err := os.Create("bad.txt")
-		handle(err, "creating bad.txt")
-		handle(file.Close(), "closing bad.txt")
+		file, err := os.Create(badFile)
+		handle(err, "creating badfile")
+		handle(file.Close(), "closing badfile")
 	}
 
 	sigChan := make(chan os.Signal, 1)
@@ -110,8 +117,8 @@ func main() {
 	signal.Notify(sigChan, syscall.SIGINT)
 
 	go func() {
-		f, err := os.OpenFile("bad.txt", os.O_WRONLY|os.O_TRUNC, 0644)
-		handle(err, "opening bad.txt")
+		f, err := os.OpenFile(badFile, os.O_WRONLY|os.O_TRUNC, 0644)
+		handle(err, "opening badfile")
 		defer f.Close()
 
 		tick := time.Tick(500 * time.Millisecond)
@@ -129,8 +136,8 @@ func main() {
 		}
 	}()
 
-	index, err := os.Open("index.txt")
-	handle(err, "reading index.txt")
+	index, err := os.Open(indexFile)
+	handle(err, "reading index file")
 
 	indexScanner := bufio.NewScanner(index)
 
