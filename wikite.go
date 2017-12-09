@@ -28,7 +28,7 @@ func handle(e error, msg string) {
 
 const (
 	maxCvtProcs  = 50
-	maxOpenFiles = 1
+	maxOpenFiles = 512
 )
 
 var (
@@ -199,28 +199,35 @@ func retrieveRef(link string) {
 		return
 	}
 
+	fileSem <- empty
 	// call head first to check filetype
 	resp, err := client.Head(link)
 	if err != nil {
+		<-fileSem
 		badSet.Add(hexDigest)
 		return
 	}
 
+	resp.Body.Close() // shouldn't need this
+	<-fileSem
+
 	if !checkResp(resp) {
-		resp.Body.Close() // shouldn't need this
 		badSet.Add(hexDigest)
 		return
 	}
 
 	log.Println("downloading ", link)
 
+	fileSem <- empty
 	// actually retrieve file
 	resp, err = client.Get(link)
 	if err != nil {
+		<-fileSem
 		return
 	}
 
 	if !checkResp(resp) {
+		<-fileSem
 		resp.Body.Close()
 		return
 	}
@@ -234,14 +241,17 @@ func retrieveRef(link string) {
 		handle(os.Remove(tmp.Name()), "destroying tmp file")
 	}()
 
-	if _, err = io.Copy(tmp, resp.Body); err != nil {
+	_, err = io.Copy(tmp, resp.Body)
+	resp.Body.Close()
+	<-fileSem // for request
+
+	if err != nil {
 		log.Printf("writing content to tmp file: %q", err)
 		badSet.Add(hexDigest)
 		return
 	}
 
-	fileSem <- empty
-
+	fileSem <- empty // temp file
 	procSem <- empty
 	defer func() {
 		<-procSem
