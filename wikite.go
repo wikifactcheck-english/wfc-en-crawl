@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -126,6 +127,7 @@ func main() {
 					file, err = os.Create("bad.txt")
 					handle(err, "creating bad.txt")
 				}
+
 				defer func() {
 					handle(file.Close(), "closing bad.txt")
 				}()
@@ -162,7 +164,7 @@ func downloadRefs(filename string) {
 
 	var article ArticleRecord
 	handle(json.NewDecoder(f).Decode(&article), "reading article")
-	f.Close()
+	handle(f.Close(), "closing ref_data file")
 	<-fileSem
 
 	log.Println("downloading refs for", filename)
@@ -261,14 +263,17 @@ func checkResp(r *http.Response) bool {
 		return false
 	}
 
-	/*
-		contentLength, err := strconv.Atoi(r.Header.Get("content-length"))
-		handle(err)
+	clString := r.Header.Get("content-length")
 
-		if contentLength > 50 * 1000 * 1000 {
+	if len(clString) > 0 {
+		contentLength, err := strconv.Atoi(clString)
+		handle(err, "content-length invalid")
+
+		// an upper limit
+		if contentLength > 100*1000*1000 {
 			return false
 		}
-	*/
+	}
 
 	return true
 }
