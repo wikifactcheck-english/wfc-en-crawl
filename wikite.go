@@ -137,6 +137,7 @@ func main() {
 	sem := make(chan struct{}, maxItems)
 	defer close(sem)
 
+	log.Println("starting downloads")
 	for indexScanner.Scan() {
 		name := indexScanner.Text()
 
