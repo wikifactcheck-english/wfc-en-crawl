@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"crypto/md5"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -33,6 +34,7 @@ var (
 		MaxIdleConns:          10,
 		IdleConnTimeout:       10 * time.Millisecond,
 		ResponseHeaderTimeout: 500 * time.Millisecond,
+		TLSNextProto:          map[string]func(string, *tls.Conn) http.RoundTripper{},
 	}
 	client = &http.Client{
 		Transport: transport,
