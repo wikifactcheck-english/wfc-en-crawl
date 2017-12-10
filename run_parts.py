@@ -8,6 +8,7 @@ if not os.path.exists('logs'):
 ct = 0
 
 procs = []
+files = []
 
 env = os.environ
 env['GOMAXPROCS'] = '4'
@@ -18,9 +19,12 @@ for filename in os.listdir('indices'):
                             stdout=logf, stderr=logf, env=env)
 
     procs.append(proc)
+    files.append(logf)
 
     ct += 1
 
 for proc in procs:
     proc.wait()
-    proc.stdout.close()
+
+for file in files:
+    file.close()
