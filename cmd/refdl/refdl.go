@@ -1,4 +1,4 @@
-package main
+package refdl
 
 import (
 	"bufio"
@@ -21,6 +21,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mammothbane/wikite_go"
 	"gopkg.in/fatih/set.v0"
 )
 
@@ -172,24 +173,11 @@ func main() {
 	}
 }
 
-type (
-	SentenceRecord struct {
-		Links []string `json:"links"`
-		Text  string   `json:"text"`
-	}
-
-	ArticleRecord struct {
-		Revision  int              `json:"revision"`
-		Id        int              `json:"id"`
-		Sentences []SentenceRecord `json:"sentences"`
-	}
-)
-
 func downloadRefs(filename string) {
 	f, err := os.Open("out/" + filename)
 	handle(err, "opening article json file")
 
-	var article ArticleRecord
+	var article wikite.ArticleRecord
 	handle(json.NewDecoder(f).Decode(&article), "reading article")
 	handle(f.Close(), "closing ref_data file")
 

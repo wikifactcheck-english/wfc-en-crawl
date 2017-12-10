@@ -14,7 +14,7 @@ env['GOMAXPROCS'] = '4'
 
 for filename in os.listdir('indices'):
     logf = open('logs/{}.log'.format(ct), 'w')
-    proc = subprocess.Popen(shlex.split('go run wikite.go -badFile bad/{}.txt -indexFile indices/{}'.format(ct, filename)),
+    proc = subprocess.Popen(shlex.split('go run cmd/refdl/refdl.go -badFile bad/{}.txt -indexFile indices/{}'.format(ct, filename)),
                             stdout=logf, stderr=logf, env=env)
 
     procs.append(proc)
