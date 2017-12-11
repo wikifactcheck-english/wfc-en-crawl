@@ -69,3 +69,5 @@ refdata
 !bin/pdftotext_win64.exe
 *.txt
 *.json
+bad
+indices
