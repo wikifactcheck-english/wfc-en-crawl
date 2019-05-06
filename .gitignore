@@ -71,3 +71,5 @@ refdata
 *.json
 bad
 indices
+evidence
+*.jsonl
